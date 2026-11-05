@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: ocean-pulse
+    env: node
+    plan: free
+    region: singapore
+    buildCommand: npm install && npm run build
+    startCommand: node apps/api/dist/index.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3001"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DEMO_MODE
+        value: "true"
+      - key: AI_PROVIDER
+        value: "fallback"
+      - key: CORS_ORIGINS
+        value: "*"

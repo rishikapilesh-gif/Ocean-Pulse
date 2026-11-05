@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.db
+*.db-journal
+.env
+.env.local
+apps/api/.env
+apps/api/dev.db
+apps/api/prisma/dev.db
+apps/api/prisma/dev.db-journal

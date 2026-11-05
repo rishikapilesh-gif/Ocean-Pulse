@@ -1,0 +1,22 @@
+{
+  "name": "ocean-pulse",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=packages/shared && npm run build --workspace=apps/api && npm run build --workspace=apps/web",
+    "dev": "npm run dev --workspaces --parallel",
+    "dev:api": "npm run dev --workspace=apps/api",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "test": "npm run test --workspace=apps/api",
+    "db:push": "npm run db:push --workspace=apps/api",
+    "db:seed": "npm run db:seed --workspace=apps/api",
+    "start": "npm run start --workspace=apps/api"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}

@@ -1,0 +1,218 @@
+// Prisma schema configured for PostgreSQL production deployments (e.g. Render PostgreSQL)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id               String   @id @default(uuid())
+  name             String
+  email            String   @unique
+  passwordHash     String
+  role             String   @default("SHORE_OPERATOR")
+  assignedVesselId String?
+  status           String   @default("ACTIVE")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  assignedIncidents Incident[]     @relation("AssignedOperator")
+  incidentNotes     IncidentNote[]
+}
+
+model Vessel {
+  id            String   @id // e.g. "B01", "B02"
+  name          String
+  regNo         String   @unique
+  masterName    String
+  equipmentType String   // "basic", "standard", "advanced"
+  operatingArea String   @default("Kochi Coastal Waters")
+  status        String   @default("ACTIVE")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  telemetries        Telemetry[]
+  assessments        RiskAssessmentRecord[]
+  incidents          Incident[]
+  assistanceRequests AssistanceRequest[]
+  messages           Message[]
+}
+
+model Telemetry {
+  id                   String   @id @default(uuid())
+  vesselId             String
+  lat                  Float
+  lng                  Float
+  gridX                Float
+  gridY                Float
+  speedKmh             Float
+  bearingDeg           Float
+  accuracyMeters       Float    @default(5.0)
+  source               String   @default("SIMULATION")
+  isGlitch             Boolean  @default(false)
+  observationTimestamp DateTime @default(now())
+  receivedAt           DateTime @default(now())
+
+  vessel Vessel @relation(fields: [vesselId], references: [id], onDelete: Cascade)
+
+  @@index([vesselId, observationTimestamp])
+}
+
+model EnvironmentalObservation {
+  id                    String    @id @default(uuid())
+  sourceId              String
+  measurementType       String    // "WAVE_HEIGHT", "WIND_SPEED", "STORM_PRESSURE", "CURRENT"
+  value                 Float
+  unit                  String
+  lat                   Float
+  lng                   Float
+  observationTime       DateTime  @default(now())
+  forecastValidTime     DateTime?
+  ingestionTime         DateTime  @default(now())
+  freshnessThresholdSec Int       @default(3600)
+}
+
+model HazardZone {
+  id          String    @id
+  name        String
+  type        String    // "REEF", "RESTRICTED", "SHOAL"
+  gridX       Float
+  gridY       Float
+  radiusKm    Float
+  severity    String    // "MEDIUM", "HIGH", "CRITICAL"
+  isSimulated Boolean   @default(true)
+  validFrom   DateTime  @default(now())
+  validUntil  DateTime?
+}
+
+model RiskAssessmentRecord {
+  id                  String   @id @default(uuid())
+  vesselId            String
+  scenarioRiskScore   Int      // 0 - 100
+  level               String   // "Safe", "Medium", "High", "Critical", "Unknown"
+  confidence          Int      // 0 - 100 %
+  horizonsJson        String   // JSON stringified array of horizons
+  factorsJson         String   // JSON stringified array of factors
+  safeBearingDeg      Float?
+  timeToDangerMinutes Float?
+  modelVersion        String   @default("ocean-pulse-rule-v1.0")
+  dataQuality         String   @default("PARTIAL")
+  calculatedAt        DateTime @default(now())
+
+  vessel Vessel @relation(fields: [vesselId], references: [id], onDelete: Cascade)
+
+  @@index([vesselId, calculatedAt])
+}
+
+model Incident {
+  id                         String    @id @default(uuid())
+  vesselId                   String
+  type                       String    // "MANUAL_SOS", "MEDICAL_EMERGENCY", etc.
+  priority                   String    // "CRITICAL", "HIGH", "MEDIUM", "LOW"
+  status                     String    @default("RECEIVED") // RECEIVED, ACKNOWLEDGED, ASSESSED, ASSIGNED, ACTION_IN_PROGRESS, RESOLVED, CLOSED
+  reportedLat                Float
+  reportedLng                Float
+  reportedGridX              Float
+  reportedGridY              Float
+  gpsAccuracyMeters          Float?
+  source                     String    @default("MANUAL_HUD")
+  idempotencyKey             String    @unique
+  clientSubmittedAt          DateTime  @default(now())
+  serverReceivedAt           DateTime  @default(now())
+  acknowledgedAt             DateTime?
+  acknowledgedByOperatorId   String?
+  assignedOperatorId         String?
+  escalatedToExternalAgency  String?
+  escalatedAt                DateTime?
+  resolvedAt                 DateTime?
+  resolutionNotes            String?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  vessel           Vessel         @relation(fields: [vesselId], references: [id], onDelete: Cascade)
+  assignedOperator User?          @relation("AssignedOperator", fields: [assignedOperatorId], references: [id])
+  notes            IncidentNote[]
+
+  @@index([vesselId, status])
+  @@index([status])
+}
+
+model IncidentNote {
+  id           String   @id @default(uuid())
+  incidentId   String
+  operatorId   String
+  operatorName String
+  note         String
+  createdAt    DateTime @default(now())
+
+  incident Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  operator User     @relation(fields: [operatorId], references: [id])
+}
+
+model AssistanceRequest {
+  id                 String    @id @default(uuid())
+  vesselId           String
+  category           String    // "DRINKING_WATER", "FOOD", "MEDICAL", "FUEL", "MECHANICAL", etc.
+  quantityOrDetails  String
+  urgency            String    @default("MEDIUM")
+  status             String    @default("PENDING") // PENDING, ACKNOWLEDGED, DISPATCHED, COMPLETED, CANCELLED
+  reportedLat        Float
+  reportedLng        Float
+  idempotencyKey     String    @unique
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  acknowledgedAt     DateTime?
+  dispatchedAt       DateTime?
+  completedAt        DateTime?
+  notes              String?
+
+  vessel Vessel @relation(fields: [vesselId], references: [id], onDelete: Cascade)
+
+  @@index([vesselId, status])
+}
+
+model Message {
+  id             String    @id @default(uuid())
+  senderId       String
+  senderName     String
+  recipientId    String
+  vesselId       String?
+  messageType    String    @default("CHAT")
+  content        String
+  idempotencyKey String    @unique
+  sentAt         DateTime  @default(now())
+  deliveredAt    DateTime?
+  acknowledgedAt DateTime?
+
+  vessel Vessel? @relation(fields: [vesselId], references: [id], onDelete: Cascade)
+
+  @@index([recipientId, deliveredAt])
+}
+
+model AuditEvent {
+  id         String   @id @default(uuid())
+  actorId    String
+  actorRole  String
+  action     String
+  entityType String
+  entityId   String
+  details    String?  // JSON string
+  timestamp  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([timestamp])
+}
+
+model DataSourceStatus {
+  id                    String   @id @default(uuid())
+  sourceName            String   @unique
+  lastSuccessfulUpdate  DateTime @default(now())
+  lastAttemptedUpdate   DateTime @default(now())
+  status                String   @default("HEALTHY") // "HEALTHY", "DEGRADED", "OFFLINE"
+  errorDetails          String?
+  freshnessThresholdSec Int      @default(300)
+}
