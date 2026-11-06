@@ -44,17 +44,12 @@ interface FleetContextType {
 const FleetContext = createContext<FleetContextType | undefined>(undefined);
 
 export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Always initialize with rich autonomous dataset — ZERO blank screens
   const initialStorm = createInitialStorm();
   const initialHazards = createInitialHazards();
   const initialVessels = createInitialVessels(initialStorm, initialHazards);
   const initialIncidents = createInitialIncidents();
   const initialRequests = createInitialRequests();
-
-  const [vessels, setVessels] = useState<VesselState[]>(initialVessels);
-  const [storm, setStorm] = useState<StormState | null>(initialStorm);
-  const [hazards, setHazards] = useState<HazardZoneState[]>(initialHazards);
-  const [simulation, setSimulation] = useState<SimulationState | null>({
+  const initialSim: SimulationState = {
     running: true,
     speedMultiplier: 1.0,
     simTimeMinutes: 0,
@@ -63,7 +58,12 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     fishermenFollowAdvice: false,
     predictedPathsVisible: true,
     language: 'en',
-  });
+  };
+
+  const [vessels, setVessels] = useState<VesselState[]>(initialVessels);
+  const [storm, setStorm] = useState<StormState | null>(initialStorm);
+  const [hazards, setHazards] = useState<HazardZoneState[]>(initialHazards);
+  const [simulation, setSimulation] = useState<SimulationState | null>(initialSim);
   const [selectedVesselId, setSelectedVesselId] = useState<string>('B01');
   const [incidents, setIncidents] = useState<IncidentRecord[]>(initialIncidents);
   const [requests, setRequests] = useState<AssistanceRequestRecord[]>(initialRequests);
@@ -72,24 +72,59 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const isUsingLocalSimRef = useRef<boolean>(true);
 
-  // Background client simulation loop (ticks every 1.5 seconds)
+  // Synchronized simulation state ref for rock-solid crash-proof animation ticks
+  const simDataRef = useRef({
+    vessels: initialVessels,
+    storm: initialStorm,
+    hazards: initialHazards,
+    simulation: initialSim,
+  });
+
+  // Keep simDataRef in sync with state changes
+  useEffect(() => {
+    if (storm && simulation) {
+      simDataRef.current = {
+        vessels,
+        storm,
+        hazards,
+        simulation,
+      };
+    }
+  }, [vessels, storm, hazards, simulation]);
+
+  // Crash-proof standalone simulation loop (runs smoothly every 1.5s on GitHub Pages or offline)
   useEffect(() => {
     const simInterval = setInterval(() => {
-      if (isUsingLocalSimRef.current && simulation?.running) {
-        setVessels((prevVessels) => {
-          setStorm((prevStorm) => {
-            if (!prevStorm) return prevStorm;
-            const res = stepSimulationTick(prevVessels, prevStorm, hazards, simulation, 1.5);
-            setSimulation(res.simulation);
-            return res.storm;
-          });
-          return prevVessels;
-        });
+      try {
+        if (!isUsingLocalSimRef.current) return;
+        const current = simDataRef.current;
+        if (!current.simulation?.running || !current.storm) return;
+
+        const next = stepSimulationTick(
+          current.vessels,
+          current.storm,
+          current.hazards,
+          current.simulation,
+          1.5
+        );
+
+        simDataRef.current = {
+          ...current,
+          vessels: next.vessels,
+          storm: next.storm,
+          simulation: next.simulation,
+        };
+
+        setVessels(next.vessels);
+        setStorm(next.storm);
+        setSimulation(next.simulation);
+      } catch (err) {
+        console.warn('[Simulation] Tick caught safely:', err);
       }
     }, 1500);
 
     return () => clearInterval(simInterval);
-  }, [simulation?.running, simulation?.speedMultiplier, simulation?.fishermenFollowAdvice, hazards]);
+  }, []);
 
   const fetchIncidentsAndRequests = useCallback(async () => {
     try {
@@ -100,7 +135,7 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (incRes?.incidents?.length) setIncidents(incRes.incidents);
       if (reqRes?.requests?.length) setRequests(reqRes.requests);
     } catch (e) {
-      // Retain standalone demo incidents
+      // Keep rich standalone incidents
     }
   }, []);
 
@@ -116,7 +151,7 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         isUsingLocalSimRef.current = false;
       }
     } catch (err) {
-      // Running autonomously in client simulation mode
+      // Running standalone in browser
       setIsConnected(true);
       isUsingLocalSimRef.current = true;
     }
@@ -142,7 +177,7 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const pollInterval = setInterval(() => {
       fetchIncidentsAndRequests();
-    }, 5000);
+    }, 6000);
 
     return () => {
       mounted = false;
@@ -161,7 +196,6 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setSimulation(res.simulation);
       await fetchIncidentsAndRequests();
     } catch (e) {
-      // Local scenario reset
       const resetStorm = createInitialStorm();
       const resetVessels = createInitialVessels(resetStorm, hazards);
       setStorm(resetStorm);
