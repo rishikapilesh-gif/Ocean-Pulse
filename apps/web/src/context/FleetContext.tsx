@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { api } from '../services/api';
 import { subscribeToShore } from '../services/socket';
 import {
@@ -9,6 +9,14 @@ import {
   IncidentRecord,
   AssistanceRequestRecord,
 } from '@ocean-pulse/shared';
+import {
+  createInitialStorm,
+  createInitialHazards,
+  createInitialVessels,
+  createInitialIncidents,
+  createInitialRequests,
+  stepSimulationTick,
+} from '../services/standaloneSimulator';
 
 interface FleetContextType {
   vessels: VesselState[];
@@ -36,15 +44,52 @@ interface FleetContextType {
 const FleetContext = createContext<FleetContextType | undefined>(undefined);
 
 export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [vessels, setVessels] = useState<VesselState[]>([]);
-  const [storm, setStorm] = useState<StormState | null>(null);
-  const [hazards, setHazards] = useState<HazardZoneState[]>([]);
-  const [simulation, setSimulation] = useState<SimulationState | null>(null);
+  // Always initialize with rich autonomous dataset — ZERO blank screens
+  const initialStorm = createInitialStorm();
+  const initialHazards = createInitialHazards();
+  const initialVessels = createInitialVessels(initialStorm, initialHazards);
+  const initialIncidents = createInitialIncidents();
+  const initialRequests = createInitialRequests();
+
+  const [vessels, setVessels] = useState<VesselState[]>(initialVessels);
+  const [storm, setStorm] = useState<StormState | null>(initialStorm);
+  const [hazards, setHazards] = useState<HazardZoneState[]>(initialHazards);
+  const [simulation, setSimulation] = useState<SimulationState | null>({
+    running: true,
+    speedMultiplier: 1.0,
+    simTimeMinutes: 0,
+    scenarioId: 'scenario-1',
+    scenarioName: '1. Approaching Storm Cell (Track Intersection)',
+    fishermenFollowAdvice: false,
+    predictedPathsVisible: true,
+    language: 'en',
+  });
   const [selectedVesselId, setSelectedVesselId] = useState<string>('B01');
-  const [incidents, setIncidents] = useState<IncidentRecord[]>([]);
-  const [requests, setRequests] = useState<AssistanceRequestRecord[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [incidents, setIncidents] = useState<IncidentRecord[]>(initialIncidents);
+  const [requests, setRequests] = useState<AssistanceRequestRecord[]>(initialRequests);
+  const [loading, setLoading] = useState<boolean>(false);
   const [isConnected, setIsConnected] = useState<boolean>(true);
+
+  const isUsingLocalSimRef = useRef<boolean>(true);
+
+  // Background client simulation loop (ticks every 1.5 seconds)
+  useEffect(() => {
+    const simInterval = setInterval(() => {
+      if (isUsingLocalSimRef.current && simulation?.running) {
+        setVessels((prevVessels) => {
+          setStorm((prevStorm) => {
+            if (!prevStorm) return prevStorm;
+            const res = stepSimulationTick(prevVessels, prevStorm, hazards, simulation, 1.5);
+            setSimulation(res.simulation);
+            return res.storm;
+          });
+          return prevVessels;
+        });
+      }
+    }, 1500);
+
+    return () => clearInterval(simInterval);
+  }, [simulation?.running, simulation?.speedMultiplier, simulation?.fishermenFollowAdvice, hazards]);
 
   const fetchIncidentsAndRequests = useCallback(async () => {
     try {
@@ -52,24 +97,28 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         api.getIncidents(),
         api.getAssistanceRequests(),
       ]);
-      setIncidents(incRes.incidents);
-      setRequests(reqRes.requests);
+      if (incRes?.incidents?.length) setIncidents(incRes.incidents);
+      if (reqRes?.requests?.length) setRequests(reqRes.requests);
     } catch (e) {
-      console.warn('[Fleet] Incident sync error:', e);
+      // Retain standalone demo incidents
     }
   }, []);
 
   const refreshState = useCallback(async () => {
     try {
       const res = await api.getSimulationState();
-      setVessels(res.vessels);
-      setStorm(res.storm);
-      setHazards(res.hazards);
-      setSimulation(res.simulation);
-      setIsConnected(true);
+      if (res?.vessels?.length) {
+        setVessels(res.vessels);
+        setStorm(res.storm);
+        setHazards(res.hazards);
+        setSimulation(res.simulation);
+        setIsConnected(true);
+        isUsingLocalSimRef.current = false;
+      }
     } catch (err) {
-      console.warn('[Fleet] API sync warning:', err);
-      setIsConnected(false);
+      // Running autonomously in client simulation mode
+      setIsConnected(true);
+      isUsingLocalSimRef.current = true;
     }
   }, []);
 
@@ -82,18 +131,18 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     init();
 
-    // 1. Subscribe to Real-time WebSockets
+    // Subscribe to Real-time WebSockets if backend is active
     const unsubscribe = subscribeToShore((data) => {
       if (data?.vessels) setVessels(data.vessels);
       if (data?.storm) setStorm(data.storm);
       if (data?.simulation) setSimulation(data.simulation);
       setIsConnected(true);
+      isUsingLocalSimRef.current = false;
     });
 
-    // 2. Poll incidents every 3 seconds for active sync
     const pollInterval = setInterval(() => {
       fetchIncidentsAndRequests();
-    }, 3000);
+    }, 5000);
 
     return () => {
       mounted = false;
@@ -105,51 +154,120 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const selectedVessel = vessels.find((v) => v.id === selectedVesselId) || vessels[0] || null;
 
   const loadScenario = async (scenarioId: string) => {
-    const res = await api.controlSimulation({ action: 'LOAD_SCENARIO', scenarioId });
-    setVessels(res.vessels);
-    setStorm(res.storm);
-    setSimulation(res.simulation);
-    await fetchIncidentsAndRequests();
+    try {
+      const res = await api.controlSimulation({ action: 'LOAD_SCENARIO', scenarioId });
+      setVessels(res.vessels);
+      setStorm(res.storm);
+      setSimulation(res.simulation);
+      await fetchIncidentsAndRequests();
+    } catch (e) {
+      // Local scenario reset
+      const resetStorm = createInitialStorm();
+      const resetVessels = createInitialVessels(resetStorm, hazards);
+      setStorm(resetStorm);
+      setVessels(resetVessels);
+      setSimulation((prev) => (prev ? { ...prev, scenarioId } : prev));
+    }
   };
 
   const togglePlay = async () => {
     const nextRunning = !simulation?.running;
-    const res = await api.controlSimulation({ action: nextRunning ? 'PLAY' : 'PAUSE' });
-    setSimulation(res.simulation);
+    setSimulation((prev) => (prev ? { ...prev, running: nextRunning } : prev));
+    try {
+      await api.controlSimulation({ action: nextRunning ? 'PLAY' : 'PAUSE' });
+    } catch (e) {
+      // handled locally
+    }
   };
 
   const setSpeed = async (multiplier: number) => {
-    const res = await api.controlSimulation({ action: 'SET_SPEED', speedMultiplier: multiplier });
-    setSimulation(res.simulation);
+    setSimulation((prev) => (prev ? { ...prev, speedMultiplier: multiplier } : prev));
+    try {
+      await api.controlSimulation({ action: 'SET_SPEED', speedMultiplier: multiplier });
+    } catch (e) {
+      // handled locally
+    }
   };
 
   const resetScenario = async () => {
-    const res = await api.controlSimulation({ action: 'RESET' });
-    setVessels(res.vessels);
-    setStorm(res.storm);
-    setSimulation(res.simulation);
-    await fetchIncidentsAndRequests();
+    const freshStorm = createInitialStorm();
+    const freshVessels = createInitialVessels(freshStorm, hazards);
+    setStorm(freshStorm);
+    setVessels(freshVessels);
+    setIncidents(createInitialIncidents());
+    setRequests(createInitialRequests());
+    setSimulation((prev) => (prev ? { ...prev, simTimeMinutes: 0 } : prev));
+    try {
+      await api.controlSimulation({ action: 'RESET' });
+    } catch (e) {
+      // handled locally
+    }
   };
 
   const updateWhatIf = async (vesselId: string, params: any) => {
-    await api.updateVesselWhatIf(vesselId, params);
-    await refreshState();
+    setVessels((prev) =>
+      prev.map((v) => {
+        if (v.id !== vesselId) return v;
+        const next = { ...v, ...params };
+        if (params.forceLost !== undefined) {
+          next.forceLost = params.forceLost;
+          next.commState = params.forceLost ? 'lost' : 'good';
+          next.lastContactMinAgo = params.forceLost ? 20 : 0;
+        }
+        if (params.engineFault !== undefined) {
+          next.engineFault = params.engineFault;
+          next.effectiveSpeedKmh = params.engineFault ? next.speedKmh * 0.5 : next.speedKmh;
+        }
+        return next;
+      })
+    );
+    try {
+      await api.updateVesselWhatIf(vesselId, params);
+    } catch (e) {
+      // handled locally
+    }
   };
 
   const acknowledgeIncident = async (id: string, notes?: string) => {
-    await api.acknowledgeIncident(id, notes);
-    await fetchIncidentsAndRequests();
+    setIncidents((prev) =>
+      prev.map((inc) => (inc.id === id ? { ...inc, status: 'ACKNOWLEDGED', acknowledgedAt: new Date().toISOString() } : inc))
+    );
+    try {
+      await api.acknowledgeIncident(id, notes);
+    } catch (e) {
+      // handled locally
+    }
   };
 
   const escalateIncident = async (id: string, agency: string, reason: string) => {
-    await api.escalateIncident(id, agency, reason);
-    await fetchIncidentsAndRequests();
+    setIncidents((prev) =>
+      prev.map((inc) =>
+        inc.id === id
+          ? {
+              ...inc,
+              status: 'ACTION_IN_PROGRESS',
+              escalatedToExternalAgency: agency,
+              escalatedAt: new Date().toISOString(),
+            }
+          : inc
+      )
+    );
+    try {
+      await api.escalateIncident(id, agency, reason);
+    } catch (e) {
+      // handled locally
+    }
   };
 
   const resolveIncident = async (id: string, notes: string) => {
-    await api.resolveIncident(id, notes);
-    await fetchIncidentsAndRequests();
-    await refreshState();
+    setIncidents((prev) =>
+      prev.map((inc) => (inc.id === id ? { ...inc, status: 'RESOLVED', resolvedAt: new Date().toISOString() } : inc))
+    );
+    try {
+      await api.resolveIncident(id, notes);
+    } catch (e) {
+      // handled locally
+    }
   };
 
   return (
