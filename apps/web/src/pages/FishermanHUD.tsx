@@ -25,13 +25,23 @@ import {
   RotateCw,
   Info,
   Navigation,
+  Ship,
 } from 'lucide-react';
 
 export const FishermanHUD: React.FC = () => {
   const { user } = useAuth();
-  const { vessels, incidents, refreshState, createSOS, createAssistanceRequest, updateWhatIf } = useFleet();
+  const {
+    vessels,
+    selectedVesselId,
+    setSelectedVesselId,
+    incidents,
+    refreshState,
+    createSOS,
+    createAssistanceRequest,
+    updateWhatIf,
+  } = useFleet();
 
-  const [activeLang, setActiveLang] = useState<SupportedLanguage>('ml'); // Default to Malayalam for local Kerala fishing fleet
+  const [activeLang, setActiveLang] = useState<SupportedLanguage>('ml'); // Default to Malayalam for Kerala fishing fleet
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [pendingCount, setPendingCount] = useState<{ sosCount: number; reqCount: number }>({
     sosCount: 0,
@@ -42,9 +52,9 @@ export const FishermanHUD: React.FC = () => {
   const [deliveryFeedback, setDeliveryFeedback] = useState<string>('');
   const [guidelinesOpen, setGuidelinesOpen] = useState(false);
 
-  // Identify vessel for this HUD (defaults to B01 Sagar Kanya)
-  const vesselId = user?.assignedVesselId || 'B01';
-  const vessel = vessels.find((v) => v.id === vesselId) || vessels[0];
+  // Synchronize active vessel with selectedVesselId from FleetContext, fallback to user assignment or B01
+  const activeId = selectedVesselId || user?.assignedVesselId || 'B01';
+  const vessel = vessels.find((v) => v.id === activeId) || vessels[0];
 
   // Check network connectivity and offline queue
   const updatePending = useCallback(async () => {
@@ -55,7 +65,6 @@ export const FishermanHUD: React.FC = () => {
   useEffect(() => {
     const handleOnline = async () => {
       setIsOnline(true);
-      console.log('[HUD] Network reconnected; reconciling offline queue...');
       const res = await offlineQueue.syncAllPending();
       if (res.syncedSOS > 0 || res.syncedRequests > 0) {
         setDeliveryFeedback(`Synced ${res.syncedSOS} emergency and ${res.syncedRequests} assistance alerts.`);
@@ -83,11 +92,20 @@ export const FishermanHUD: React.FC = () => {
     .filter((i) => i.vesselId === vessel?.id)
     .sort((a, b) => new Date(b.clientSubmittedAt).getTime() - new Date(a.clientSubmittedAt).getTime())[0];
 
-  const rawAdvice = vessel?.lastDeliveredWarning?.level || (vessel?.assessment?.level === 'Critical' ? 'DANGER' : vessel?.assessment?.level === 'High' || vessel?.assessment?.level === 'Medium' ? 'CAUTION' : 'SAFE');
-  const advice: 'SAFE' | 'CAUTION' | 'DANGER' = rawAdvice === 'DANGER' ? 'DANGER' : rawAdvice === 'CAUTION' ? 'CAUTION' : 'SAFE';
+  // Dynamic synchronized advisory: DANGER if in critical danger or active SOS, CAUTION if high/medium or engine/comms fault, SAFE otherwise
+  const riskLevel = vessel?.assessment?.level || 'Safe';
+  const isDanger = vessel?.activeDistress || riskLevel === 'Critical';
+  const isCaution = riskLevel === 'High' || riskLevel === 'Medium' || vessel?.engineFault || vessel?.commState === 'lost';
+
+  const advice: 'SAFE' | 'CAUTION' | 'DANGER' = isDanger
+    ? 'DANGER'
+    : isCaution
+    ? 'CAUTION'
+    : 'SAFE';
+
   const lang = TRANSLATIONS[activeLang] || TRANSLATIONS.en;
 
-  // Speech synthesizer
+  // Speech synthesizer synchronized with the active vessel's warning state
   const speakWarning = () => {
     if (!('speechSynthesis' in window)) return;
     const text = lang?.advice?.[advice] || 'Safe conditions. Continue journey carefully.';
@@ -171,7 +189,7 @@ export const FishermanHUD: React.FC = () => {
     if (!vessel) return;
     await updateWhatIf(vessel.id, {
       lastDeliveredWarning: {
-        ...(vessel.lastDeliveredWarning || { level: 'SAFE', safeBearingDeg: 270, issuedAtIso: new Date().toISOString(), acknowledgedByFisher: true }),
+        ...(vessel.lastDeliveredWarning || { level: 'SAFE', safeBearingDeg: 270, issuedAtIso: new Date().toISOString() }),
         acknowledgedByFisher: true,
         acknowledgedAtIso: new Date().toISOString(),
       },
@@ -193,7 +211,43 @@ export const FishermanHUD: React.FC = () => {
     <div className="min-h-screen bg-ocean-950 text-white flex flex-col justify-between max-w-lg mx-auto shadow-2xl border-x border-cyan-500/20 pb-6 relative">
       {/* Top Mobile Status Header */}
       <div className="bg-ocean-900/90 backdrop-blur-xl border-b border-ocean-700/80 p-3.5 space-y-2.5 select-none shadow-md">
-        <div className="flex items-center justify-between">
+        {/* Boat Selector Bar & Language Toggle */}
+        <div className="flex items-center justify-between gap-2 bg-ocean-950/80 p-2 rounded-xl border border-cyan-500/30">
+          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+            <Ship className="w-4 h-4 text-pulse-cyan shrink-0" />
+            <span className="text-[11px] text-ocean-300 font-bold shrink-0">Boat:</span>
+            <select
+              value={vessel?.id || 'B01'}
+              onChange={(e) => setSelectedVesselId(e.target.value)}
+              className="bg-ocean-900 border border-pulse-cyan/50 rounded-lg px-2 py-1 text-xs text-white font-extrabold focus:outline-none shadow-inner w-full cursor-pointer"
+            >
+              {vessels.map((v) => {
+                const lvl = v.assessment?.level || 'Safe';
+                const icon = v.activeDistress ? '🚨' : lvl === 'Critical' ? '🔴' : lvl === 'High' || lvl === 'Medium' ? '🟠' : '🟢';
+                return (
+                  <option key={v.id} value={v.id} className="bg-ocean-900 text-white font-semibold">
+                    {icon} {v.id} — {v.name} ({lvl.toUpperCase()})
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+
+          {/* Regional Coastal Language Switcher */}
+          <select
+            value={activeLang}
+            onChange={(e) => setActiveLang(e.target.value as SupportedLanguage)}
+            className="bg-ocean-950 border border-cyan-500/40 rounded-xl px-2.5 py-1 text-xs text-pulse-cyan font-bold focus:outline-none shadow-sm cursor-pointer shrink-0"
+          >
+            <option value="ml">മലയാളം</option>
+            <option value="ta">தமிழ்</option>
+            <option value="hi">हिन्दी</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+
+        {/* Vessel Telemetry Info */}
+        <div className="flex items-center justify-between pt-1">
           <div>
             <h1 className="font-black text-lg tracking-tight text-white flex items-center gap-2">
               <span>{vessel.name}</span>
@@ -202,21 +256,24 @@ export const FishermanHUD: React.FC = () => {
               </span>
             </h1>
             <p className="text-[11px] text-ocean-300 mt-0.5">
-              Master: <strong className="text-white font-semibold">{vessel.master}</strong> • {vessel.regNo}
+              Master: <strong className="text-white font-semibold">{vessel.master}</strong> • Reg: {vessel.regNo}
             </p>
           </div>
-
-          {/* Language Switcher */}
-          <select
-            value={activeLang}
-            onChange={(e) => setActiveLang(e.target.value as SupportedLanguage)}
-            className="bg-ocean-950 border border-cyan-500/40 rounded-xl px-2.5 py-1 text-xs text-pulse-cyan font-bold focus:outline-none shadow-sm cursor-pointer"
-          >
-            <option value="ml">മലയാളം</option>
-            <option value="ta">தமிழ்</option>
-            <option value="hi">हिन्दी</option>
-            <option value="en">English</option>
-          </select>
+          <div className="text-right">
+            <span
+              className={`px-2.5 py-1 rounded-full text-xs font-black uppercase tracking-wider ${
+                riskLevel === 'Critical'
+                  ? 'bg-pulse-critical text-white'
+                  : riskLevel === 'High'
+                  ? 'bg-pulse-high text-white'
+                  : riskLevel === 'Medium'
+                  ? 'bg-pulse-medium text-ocean-950'
+                  : 'bg-pulse-safe text-white'
+              }`}
+            >
+              {riskLevel.toUpperCase()} {vessel.assessment?.scenarioRiskScore ?? 0}%
+            </span>
+          </div>
         </div>
 
         {/* Network & Connection Status Pill */}
@@ -306,13 +363,19 @@ export const FishermanHUD: React.FC = () => {
           <div className="flex gap-2.5 mt-3.5">
             <button
               onClick={speakWarning}
-              className="flex-1 py-2.5 rounded-xl bg-ocean-800/90 hover:bg-ocean-700 text-pulse-cyan text-xs font-bold flex items-center justify-center gap-2 border border-cyan-500/30 transition-all shadow-sm hover:shadow-cyan-500/20"
+              className={`flex-1 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 border transition-all shadow-md ${
+                advice === 'DANGER'
+                  ? 'bg-rose-900 hover:bg-rose-800 text-white border-rose-500 shadow-rose-950/60 animate-pulse'
+                  : advice === 'CAUTION'
+                  ? 'bg-amber-900 hover:bg-amber-800 text-white border-amber-500 shadow-amber-950/60'
+                  : 'bg-ocean-800 hover:bg-ocean-700 text-pulse-cyan border-cyan-500/40 shadow-cyan-950/40'
+              }`}
             >
               <Volume2 className="w-4 h-4" />
-              Speak Warning ({lang.name})
+              <span>Speak Warning ({lang.name.split(' ')[0]})</span>
             </button>
 
-            {!vessel.lastDeliveredWarning.acknowledgedByFisher && (
+            {!vessel.lastDeliveredWarning?.acknowledgedByFisher && (
               <button
                 onClick={handleAcknowledgeWarning}
                 className="py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-all shadow-md shadow-emerald-900/40"
@@ -361,12 +424,12 @@ export const FishermanHUD: React.FC = () => {
                 className={`p-1.5 rounded-lg ${
                   latestIncident.status === 'ACTION_IN_PROGRESS'
                     ? 'bg-purple-600 text-white'
-                    : latestIncident.escalatedToExternalAgencyAt
+                    : (latestIncident as any).escalatedToExternalAgencyAt
                     ? 'bg-purple-950 text-purple-200 border border-purple-700'
                     : 'bg-ocean-950 text-ocean-500'
                 }`}
               >
-                {latestIncident.escalatedToExternalAgencyAt ? '✓ MRCC Action' : 'MRCC Queue'}
+                {(latestIncident as any).escalatedToExternalAgencyAt ? '✓ MRCC Action' : 'MRCC Queue'}
               </div>
               <div
                 className={`p-1.5 rounded-lg ${

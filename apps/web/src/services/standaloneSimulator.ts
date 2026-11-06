@@ -556,12 +556,21 @@ export function stepSimulationTick(
     simTimeMinutes: nextSimTimeMinutes,
   };
 
-  // 3. Recalculate deterministic risk and rank fleet (TDZ-free)
+  // 3. Recalculate deterministic risk and rank fleet (TDZ-free & warning synchronized)
   const assessedVessels = rankFleet(
-    nextVessels.map((v) => ({
-      ...v,
-      assessment: assessVesselRisk(v, nextStorm, hazards, nextSimTimeMinutes),
-    }))
+    nextVessels.map((v) => {
+      const a = assessVesselRisk(v, nextStorm, hazards, nextSimTimeMinutes);
+      const dynamicAdvice = a.level === 'Critical' ? 'DANGER' : a.level === 'High' || a.level === 'Medium' ? 'CAUTION' : 'SAFE';
+      return {
+        ...v,
+        assessment: a,
+        lastDeliveredWarning: {
+          ...(v.lastDeliveredWarning || { issuedAtIso: new Date().toISOString(), acknowledgedByFisher: false }),
+          level: dynamicAdvice,
+          safeBearingDeg: a.safeBearingDeg,
+        },
+      };
+    })
   );
 
   return {

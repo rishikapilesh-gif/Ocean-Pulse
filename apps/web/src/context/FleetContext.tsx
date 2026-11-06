@@ -288,12 +288,22 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updatedAtIso: new Date().toISOString(),
       };
 
-      // Immediately recalculate vessel risks with new storm parameters
+      // Immediately recalculate vessel risks and dynamic warning levels with new storm parameters
+      const currentVessels = simDataRef.current?.vessels?.length ? simDataRef.current.vessels : vessels;
       const reassessed = rankFleet(
-        vessels.map((v) => ({
-          ...v,
-          assessment: assessVesselRisk(v, updated, hazards, simulation?.simTimeMinutes || 0),
-        }))
+        currentVessels.map((v) => {
+          const a = assessVesselRisk(v, updated, hazards, simulation?.simTimeMinutes || 0);
+          const dynamicAdvice = a.level === 'Critical' ? 'DANGER' : a.level === 'High' || a.level === 'Medium' ? 'CAUTION' : 'SAFE';
+          return {
+            ...v,
+            assessment: a,
+            lastDeliveredWarning: {
+              ...(v.lastDeliveredWarning || { issuedAtIso: new Date().toISOString(), acknowledgedByFisher: false }),
+              level: dynamicAdvice,
+              safeBearingDeg: a.safeBearingDeg,
+            },
+          };
+        })
       );
       setVessels(reassessed);
 
