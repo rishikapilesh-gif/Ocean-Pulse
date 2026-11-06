@@ -466,22 +466,26 @@ export function stepSimulationTick(
   storm: StormState,
   hazards: HazardZoneState[],
   sim: SimulationState,
-  deltaSec: number = 1.5
+  deltaSec: number = 1.0
 ): { vessels: VesselState[]; storm: StormState; simulation: SimulationState } {
   if (!sim.running) {
     return { vessels, storm, simulation: sim };
   }
 
   const effectiveDeltaSec = deltaSec * (sim.speedMultiplier || 1.0);
-  const deltaMinutes = effectiveDeltaSec / 60;
+  // Hackathon dynamic simulation time scaling: 1 real sec = 0.8 simulation minutes
+  const deltaMinutes = effectiveDeltaSec * 0.8;
 
   // 1. Advance Storm Coordinates
   const stormVel = calculateStormVelocity(storm);
   let nextStormX = storm.x + stormVel.vx * deltaMinutes;
   let nextStormY = storm.y + stormVel.vy * deltaMinutes;
 
+  // Endless oceanic wrap
   if (nextStormX < 5) nextStormX = 115;
   if (nextStormX > 115) nextStormX = 5;
+  if (nextStormY < 5) nextStormY = 75;
+  if (nextStormY > 75) nextStormY = 5;
 
   const nextStorm: StormState = {
     ...storm,
@@ -506,16 +510,28 @@ export function stepSimulationTick(
     let nextY = v.y + Math.sin(angle) * speedKmPerMin * deltaMinutes;
 
     const cx = coastX(nextY);
-    if (nextX < cx + 2) nextX = cx + 2;
-    if (nextX > 115) nextX = 115;
-    if (nextY < 5) nextY = 5;
-    if (nextY > 75) nextY = 75;
+    if (nextX < cx + 3) {
+      nextX = cx + 3;
+      currentBearing = 90; // steer away from land
+    }
+    if (nextX > 112) {
+      nextX = 112;
+      currentBearing = 270;
+    }
+    if (nextY < 6) {
+      nextY = 6;
+      currentBearing = 180;
+    }
+    if (nextY > 74) {
+      nextY = 74;
+      currentBearing = 0;
+    }
 
     const trail = [...(v.trail || [])];
     const lastPoint = trail[trail.length - 1];
-    if (!lastPoint || Math.hypot(nextX - lastPoint.x, nextY - lastPoint.y) > 0.8) {
+    if (!lastPoint || Math.hypot(nextX - lastPoint.x, nextY - lastPoint.y) > 0.3) {
       trail.push({ x: nextX, y: nextY });
-      if (trail.length > 30) trail.shift();
+      if (trail.length > 50) trail.shift();
     }
 
     const geo = gridToGeo({ x: nextX, y: nextY });

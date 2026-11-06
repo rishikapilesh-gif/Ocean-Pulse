@@ -26,9 +26,16 @@ async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise
     headers,
   });
 
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    const err = new Error(`Non-JSON response received from server (${contentType})`) as any;
+    err.status = response.status;
+    throw err;
+  }
+
   const json = await response.json().catch(() => ({}));
 
-  if (!response.ok || json.success === false) {
+  if (!response.ok || json.success === false || !json.data) {
     const errorMsg = json.error?.message || `HTTP error ${response.status}`;
     const err = new Error(errorMsg) as any;
     err.code = json.error?.code;

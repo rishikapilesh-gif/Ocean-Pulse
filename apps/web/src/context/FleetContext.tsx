@@ -78,6 +78,7 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [isConnected, setIsConnected] = useState<boolean>(true);
 
   const isUsingLocalSimRef = useRef<boolean>(true);
+  const lastSocketMessageTimeRef = useRef<number>(0);
 
   // Synchronized simulation state ref for rock-solid crash-proof animation ticks
   const simDataRef = useRef({
@@ -99,11 +100,14 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [vessels, storm, hazards, simulation]);
 
-  // Crash-proof standalone simulation loop (runs smoothly every 1.5s on GitHub Pages or offline)
+  // Crash-proof standalone simulation loop (runs smoothly every 1000ms on GitHub Pages or offline)
   useEffect(() => {
     const simInterval = setInterval(() => {
       try {
-        if (!isUsingLocalSimRef.current) return;
+        // Yield to server only if live WebSocket packets arrived in the last 3.5 seconds
+        const hasLiveServer = Date.now() - lastSocketMessageTimeRef.current < 3500;
+        if (hasLiveServer) return;
+
         const current = simDataRef.current;
         if (!current.simulation?.running || !current.storm) return;
 
@@ -112,7 +116,7 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           current.storm,
           current.hazards,
           current.simulation,
-          1.5
+          1.0
         );
 
         simDataRef.current = {
@@ -128,7 +132,7 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       } catch (err) {
         console.warn('[Simulation] Tick caught safely:', err);
       }
-    }, 1500);
+    }, 1000);
 
     return () => clearInterval(simInterval);
   }, []);
@@ -177,11 +181,13 @@ export const FleetProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     let unsubscribe = () => {};
     try {
       unsubscribe = subscribeToShore((data) => {
-        if (data?.vessels) setVessels(data.vessels);
-        if (data?.storm) setStorm(data.storm);
-        if (data?.simulation) setSimulation(data.simulation);
-        setIsConnected(true);
-        isUsingLocalSimRef.current = false;
+        if (data?.vessels?.length) {
+          lastSocketMessageTimeRef.current = Date.now();
+          setVessels(data.vessels);
+          if (data?.storm) setStorm(data.storm);
+          if (data?.simulation) setSimulation(data.simulation);
+          setIsConnected(true);
+        }
       });
     } catch (e) {
       // Standalone mode
