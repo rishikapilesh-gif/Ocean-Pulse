@@ -5,22 +5,78 @@ import { AICopilotBrief } from '@ocean-pulse/shared';
 import { Bot, RefreshCw, CheckCircle, ShieldCheck, Tag, AlertTriangle } from 'lucide-react';
 
 export const AICopilotPanel: React.FC = () => {
-  const { selectedVesselId, selectedVessel } = useFleet();
+  const { selectedVesselId, selectedVessel, vessels, storm } = useFleet();
   const [brief, setBrief] = useState<AICopilotBrief | null>(null);
   const [loading, setLoading] = useState(false);
   const [autoUpdate, setAutoUpdate] = useState(true);
 
   const fetchBrief = async () => {
-    if (!selectedVesselId) return;
+    if (!selectedVessel) return;
     setLoading(true);
     try {
-      const res = await api.getCopilotBrief(selectedVesselId);
-      setBrief(res.brief);
+      const res = await api.getCopilotBrief(selectedVessel.id);
+      if (res?.brief) {
+        setBrief(res.brief);
+        return;
+      }
     } catch (err) {
-      console.warn('[AICopilot] Brief load failed:', err);
+      // Offline / standalone fallback
     } finally {
       setLoading(false);
     }
+
+    // Client-side evidence-grounded briefing generator
+    const rankedIndex = vessels.findIndex((v) => v.id === selectedVessel.id);
+    const a = selectedVessel.assessment;
+    const factors = a?.factors || [];
+    const dominantFactors = factors.slice(0, 4).map((f) => f.text).join(' • ');
+
+    const prioritySection = `${(a?.level || 'UNKNOWN').toUpperCase()} — Vessel ${selectedVessel.id} (${selectedVessel.name}) is ranked #${rankedIndex >= 0 ? rankedIndex + 1 : 1} of ${vessels.length} in fleet urgency. Deterministic Scenario Score: ${a?.scenarioRiskScore ?? 0}/100.`;
+
+    const whySection = dominantFactors.length > 0
+      ? dominantFactors
+      : 'No critical hazard intersecting the 15-minute projected trajectory under current sea and weather conditions.';
+
+    let whatToDo = `Current safety advisory: ${selectedVessel.lastDeliveredWarning?.level || 'SAFE'}.`;
+    if (a?.recommendedCompass) {
+      whatToDo += ` Recommended evasive bearing: ${a.recommendedCompass} (${Math.round(a.safeBearingDeg || 0)}° compass).`;
+    }
+    if (selectedVessel.commState === 'lost') {
+      whatToDo += ` WARNING: Vessel lost communication ~${Math.round(selectedVessel.lastContactMinAgo)} min ago. Vessel is operating on the last delivered warning (${selectedVessel.lastDeliveredWarning?.level || 'SAFE'}). Shore team should attempt coastal VHF relay or contact nearby vessels.`;
+    } else {
+      whatToDo += ` Advise vessel master (${selectedVessel.master}) to maintain vigil and monitor shore broadcasts.`;
+    }
+
+    const dataLimitations = `Assessment Confidence: ${a?.confidence ?? 0}%. Data Quality: ${a?.dataQuality || 'PARTIAL'}. Equipment Profile: ${selectedVessel.equipment?.label || 'Small Craft'} (${selectedVessel.equipment?.comms || 'VHF'}, ${selectedVessel.equipment?.rangeKm || 40} km max range). ${
+      !selectedVessel.equipment?.hasWeatherReceiver ? 'No onboard marine weather receiver; relying exclusively on coastal forecasts.' : ''
+    } ${!selectedVessel.equipment?.hasCompass ? 'No gyrocompass; heading is estimated from satellite GPS trajectory.' : ''} ${
+      selectedVessel.glitchActive ? 'CRITICAL DATA CONFLICT: Active GPS glitch detected; fix diverges from beacon coordinates.' : ''
+    }`;
+
+    const evidenceTags = [
+      `Vessel ${selectedVessel.id} (${selectedVessel.name})`,
+      `${selectedVessel.equipment?.label || 'Small Craft'}`,
+      `GPS: ${selectedVessel.glitchActive ? 'CONFLICT' : 'VALID'}`,
+      `Comms: ${selectedVessel.commState.toUpperCase()}`,
+      selectedVessel.equipment?.hasWeatherReceiver ? 'Weather Receiver' : 'No Weather Sensor',
+      selectedVessel.equipment?.hasCompass ? 'Compass' : 'Estimated Heading',
+      selectedVessel.equipment?.hasEngineSensor ? (selectedVessel.engineFault ? 'ENGINE FAULT' : 'Engine Normal') : 'No Engine Sensor',
+      `Risk: ${a?.scenarioRiskScore ?? 0}% (${a?.level || 'Safe'})`,
+      `Confidence: ${a?.confidence ?? 0}%`,
+      `TTD: ${a?.timeToDangerLabel || 'None'}`,
+    ];
+
+    setBrief({
+      vesselId: selectedVessel.id,
+      modelVersion: 'ocean-pulse-copilot-deterministic-v1',
+      generatedAt: new Date().toISOString(),
+      isFallback: true,
+      prioritySection,
+      whySection,
+      whatToDoSection: whatToDo,
+      dataLimitationsSection: dataLimitations,
+      evidenceTags,
+    });
   };
 
   useEffect(() => {

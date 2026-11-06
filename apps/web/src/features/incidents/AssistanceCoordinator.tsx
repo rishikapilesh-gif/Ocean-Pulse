@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 
 export const AssistanceCoordinator: React.FC = () => {
-  const { requests, refreshState } = useFleet();
+  const { requests, updateAssistanceStatus } = useFleet();
 
   const getCategoryIcon = (cat: string) => {
     switch (cat) {
@@ -35,8 +35,7 @@ export const AssistanceCoordinator: React.FC = () => {
   };
 
   const handleUpdate = async (id: string, status: string) => {
-    await api.updateRequestStatus(id, status, `Status updated to ${status} by Shore Operator`);
-    await refreshState();
+    await updateAssistanceStatus(id, status, `Status updated to ${status} by Shore Operator`);
   };
 
   return (

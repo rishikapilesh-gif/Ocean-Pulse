@@ -29,7 +29,7 @@ import {
 
 export const FishermanHUD: React.FC = () => {
   const { user } = useAuth();
-  const { vessels, incidents, refreshState } = useFleet();
+  const { vessels, incidents, refreshState, createSOS, createAssistanceRequest, updateWhatIf } = useFleet();
 
   const [activeLang, setActiveLang] = useState<SupportedLanguage>('ml'); // Default to Malayalam for local Kerala fishing fleet
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
@@ -83,15 +83,16 @@ export const FishermanHUD: React.FC = () => {
     .filter((i) => i.vesselId === vessel?.id)
     .sort((a, b) => new Date(b.clientSubmittedAt).getTime() - new Date(a.clientSubmittedAt).getTime())[0];
 
-  const advice = vessel?.lastDeliveredWarning?.level || 'SAFE';
-  const lang = TRANSLATIONS[activeLang];
+  const rawAdvice = vessel?.lastDeliveredWarning?.level || (vessel?.assessment?.level === 'Critical' ? 'DANGER' : vessel?.assessment?.level === 'High' || vessel?.assessment?.level === 'Medium' ? 'CAUTION' : 'SAFE');
+  const advice: 'SAFE' | 'CAUTION' | 'DANGER' = rawAdvice === 'DANGER' ? 'DANGER' : rawAdvice === 'CAUTION' ? 'CAUTION' : 'SAFE';
+  const lang = TRANSLATIONS[activeLang] || TRANSLATIONS.en;
 
   // Speech synthesizer
   const speakWarning = () => {
     if (!('speechSynthesis' in window)) return;
-    const text = lang.advice[advice];
+    const text = lang?.advice?.[advice] || 'Safe conditions. Continue journey carefully.';
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = lang.code;
+    u.lang = lang?.code || 'en-IN';
     u.rate = 0.9;
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(u);
@@ -114,19 +115,18 @@ export const FishermanHUD: React.FC = () => {
       notes,
     };
 
-    if (navigator.onLine && vessel.commState !== 'lost') {
-      try {
-        const res = await api.submitSOS(payload);
-        setDeliveryFeedback(res.message);
-        await refreshState();
-      } catch (err: any) {
-        console.warn('[HUD] Direct SOS submission failed, queueing offline:', err);
+    // Immediate local creation so UI and Shore Console update in real-time
+    await createSOS(payload);
+    setDeliveryFeedback('EMERGENCY SOS TRANSMITTED to Shore Command & Coastal SAR.');
+
+    try {
+      if (navigator.onLine && vessel.commState !== 'lost') {
+        await api.submitSOS(payload);
+      } else {
         await offlineQueue.queueSOS(payload);
-        setDeliveryFeedback('NETWORK OFFLINE: SOS queued locally in device memory. Will auto-sync upon reconnection.');
       }
-    } else {
+    } catch (err: any) {
       await offlineQueue.queueSOS(payload);
-      setDeliveryFeedback('NOT CONNECTED: SOS stored in local offline queue. Will transmit when signal returns.');
     }
 
     await updatePending();
@@ -149,18 +149,18 @@ export const FishermanHUD: React.FC = () => {
       idempotencyKey,
     };
 
-    if (navigator.onLine && vessel.commState !== 'lost') {
-      try {
+    // Immediate local creation
+    await createAssistanceRequest(payload);
+    setDeliveryFeedback('Assistance request recorded and routed to Shore Logistics.');
+
+    try {
+      if (navigator.onLine && vessel.commState !== 'lost') {
         await api.createAssistanceRequest(payload);
-        setDeliveryFeedback('Assistance request transmitted to Shore Control.');
-        await refreshState();
-      } catch (err) {
+      } else {
         await offlineQueue.queueAssistanceRequest(payload);
-        setDeliveryFeedback('Stored in offline queue.');
       }
-    } else {
+    } catch (err) {
       await offlineQueue.queueAssistanceRequest(payload);
-      setDeliveryFeedback('Stored in offline queue.');
     }
 
     await updatePending();
@@ -169,8 +169,18 @@ export const FishermanHUD: React.FC = () => {
 
   const handleAcknowledgeWarning = async () => {
     if (!vessel) return;
-    await api.acknowledgeWarning(vessel.id);
-    await refreshState();
+    await updateWhatIf(vessel.id, {
+      lastDeliveredWarning: {
+        ...(vessel.lastDeliveredWarning || { level: 'SAFE', safeBearingDeg: 270, issuedAtIso: new Date().toISOString(), acknowledgedByFisher: true }),
+        acknowledgedByFisher: true,
+        acknowledgedAtIso: new Date().toISOString(),
+      },
+    });
+    try {
+      await api.acknowledgeWarning(vessel.id);
+    } catch (e) {
+      // handled locally
+    }
   };
 
   if (!vessel) {

@@ -73,7 +73,7 @@ export function createInitialVessels(storm: StormState, hazards: HazardZoneState
       lat: geo.lat,
       lng: geo.lng,
       speedKmh: f.speedKmh,
-      effectiveSpeedKmh: f.speedKmh,
+      effectiveSpeedKmh: isB04 ? f.speedKmh * 0.5 : f.speedKmh,
       headingRad: angle,
       courseRad: angle,
       bearingDeg: f.bearing,
@@ -199,6 +199,268 @@ export function createInitialRequests(): AssistanceRequestRecord[] {
   ];
 }
 
+/**
+ * Tactical Scenarios with full local support for standalone browser demo
+ */
+export function getStandaloneScenarioData(scenarioId: string, hazards: HazardZoneState[]) {
+  const baseStorm = createInitialStorm();
+  const baseVessels = createInitialVessels(baseStorm, hazards);
+
+  if (scenarioId === 'scenario-2') {
+    // 2. Propulsion Breakdown & Drift into Reef
+    const storm: StormState = {
+      ...baseStorm,
+      x: 95,
+      y: 40,
+      radiusKm: 14,
+      bearingDeg: 250,
+      speedKmh: 15,
+      lat: gridToGeo({ x: 95, y: 40 }).lat,
+      lng: gridToGeo({ x: 95, y: 40 }).lng,
+    };
+    const vessels = baseVessels.map((v) => {
+      if (v.id === 'B04') {
+        const angle = bearingToAngle(120);
+        return {
+          ...v,
+          x: 42,
+          y: 60,
+          lat: gridToGeo({ x: 42, y: 60 }).lat,
+          lng: gridToGeo({ x: 42, y: 60 }).lng,
+          bearingDeg: 120,
+          headingRad: angle,
+          courseRad: angle,
+          engineFault: true,
+          effectiveSpeedKmh: 4,
+          trail: [{ x: 42, y: 60 }],
+        };
+      }
+      return v;
+    });
+
+    const ranked = rankFleet(
+      vessels.map((v) => ({ ...v, assessment: assessVesselRisk(v, storm, hazards, 0) }))
+    );
+
+    const incidents: IncidentRecord[] = [
+      {
+        id: 'INC-SC2-001',
+        vesselId: 'B04',
+        vesselName: 'Samudra Ratna',
+        type: 'FIRE_OR_ENGINE',
+        priority: 'CRITICAL',
+        status: 'RECEIVED',
+        reportedLat: 10.09,
+        reportedLng: 76.09,
+        reportedGridX: 42,
+        reportedGridY: 60,
+        source: 'MANUAL_HUD',
+        idempotencyKey: 'inc-sc2-b04',
+        clientSubmittedAt: new Date().toISOString(),
+        serverReceivedAt: new Date().toISOString(),
+        operatorNotes: [],
+        auditTrail: [],
+      },
+    ];
+
+    return {
+      storm,
+      vessels: ranked,
+      incidents,
+      requests: createInitialRequests(),
+      scenarioName: '2. Propulsion Breakdown & Reef Drift',
+    };
+  }
+
+  if (scenarioId === 'scenario-3') {
+    // 3. Communication Loss & Stale Telemetry
+    const storm: StormState = {
+      ...baseStorm,
+      x: 80,
+      y: 25,
+      radiusKm: 15,
+      bearingDeg: 280,
+      speedKmh: 20,
+      lat: gridToGeo({ x: 80, y: 25 }).lat,
+      lng: gridToGeo({ x: 80, y: 25 }).lng,
+    };
+    const vessels = baseVessels.map((v) => {
+      if (v.id === 'B03') {
+        return {
+          ...v,
+          x: 48,
+          y: 22,
+          lat: gridToGeo({ x: 48, y: 22 }).lat,
+          lng: gridToGeo({ x: 48, y: 22 }).lng,
+          forceLost: true,
+          commState: 'lost' as const,
+          commQuality: 0,
+          lastContactMinAgo: 45,
+          trail: [{ x: 48, y: 22 }],
+        };
+      }
+      return v;
+    });
+
+    const ranked = rankFleet(
+      vessels.map((v) => ({ ...v, assessment: assessVesselRisk(v, storm, hazards, 0) }))
+    );
+
+    return {
+      storm,
+      vessels: ranked,
+      incidents: createInitialIncidents(),
+      requests: createInitialRequests(),
+      scenarioName: '3. Communication Loss & Stale Telemetry',
+    };
+  }
+
+  if (scenarioId === 'scenario-4') {
+    // 4. Multiple Concurrent SOS Alerts
+    const storm: StormState = {
+      ...baseStorm,
+      x: 88,
+      y: 35,
+      radiusKm: 13,
+      bearingDeg: 260,
+      speedKmh: 16,
+      lat: gridToGeo({ x: 88, y: 35 }).lat,
+      lng: gridToGeo({ x: 88, y: 35 }).lng,
+    };
+    const vessels = baseVessels.map((v) => {
+      if (v.id === 'B02') {
+        return {
+          ...v,
+          x: 55,
+          y: 40,
+          lat: gridToGeo({ x: 55, y: 40 }).lat,
+          lng: gridToGeo({ x: 55, y: 40 }).lng,
+          activeDistress: true,
+          activeDistressType: 'CAPSIZE_OR_SINKING' as any,
+          unacknowledgedAlertsCount: 1,
+        };
+      }
+      if (v.id === 'B07') {
+        return {
+          ...v,
+          x: 72,
+          y: 48,
+          lat: gridToGeo({ x: 72, y: 48 }).lat,
+          lng: gridToGeo({ x: 72, y: 48 }).lng,
+          activeDistress: true,
+          activeDistressType: 'MEDICAL_EMERGENCY' as any,
+          unacknowledgedAlertsCount: 1,
+        };
+      }
+      return v;
+    });
+
+    const ranked = rankFleet(
+      vessels.map((v) => ({ ...v, assessment: assessVesselRisk(v, storm, hazards, 0) }))
+    );
+
+    const incidents: IncidentRecord[] = [
+      {
+        id: 'INC-SC4-001',
+        vesselId: 'B02',
+        vesselName: 'Matsya Jyoti',
+        type: 'CAPSIZE_OR_SINKING',
+        priority: 'CRITICAL',
+        status: 'RECEIVED',
+        reportedLat: 9.91,
+        reportedLng: 76.28,
+        reportedGridX: 55,
+        reportedGridY: 40,
+        source: 'MANUAL_HUD',
+        idempotencyKey: 'inc-sc4-b02',
+        clientSubmittedAt: new Date().toISOString(),
+        serverReceivedAt: new Date().toISOString(),
+        operatorNotes: [],
+        auditTrail: [],
+      },
+      {
+        id: 'INC-SC4-002',
+        vesselId: 'B07',
+        vesselName: 'Varuna',
+        type: 'MEDICAL_EMERGENCY',
+        priority: 'CRITICAL',
+        status: 'RECEIVED',
+        reportedLat: 9.97,
+        reportedLng: 76.49,
+        reportedGridX: 72,
+        reportedGridY: 48,
+        source: 'MANUAL_HUD',
+        idempotencyKey: 'inc-sc4-b07',
+        clientSubmittedAt: new Date().toISOString(),
+        serverReceivedAt: new Date().toISOString(),
+        operatorNotes: [],
+        auditTrail: [],
+      },
+    ];
+
+    return {
+      storm,
+      vessels: ranked,
+      incidents,
+      requests: createInitialRequests(),
+      scenarioName: '4. Multiple Concurrent SOS Alerts',
+    };
+  }
+
+  if (scenarioId === 'scenario-5') {
+    // 5. Offline HUD Reconnection & Sync
+    const storm: StormState = {
+      ...baseStorm,
+      x: 85,
+      y: 20,
+      radiusKm: 12,
+      bearingDeg: 270,
+      speedKmh: 14,
+      lat: gridToGeo({ x: 85, y: 20 }).lat,
+      lng: gridToGeo({ x: 85, y: 20 }).lng,
+    };
+    const vessels = baseVessels.map((v) => {
+      if (v.id === 'B10') {
+        return {
+          ...v,
+          x: 60,
+          y: 15,
+          lat: gridToGeo({ x: 60, y: 15 }).lat,
+          lng: gridToGeo({ x: 60, y: 15 }).lng,
+          forceLost: true,
+          commState: 'lost' as const,
+          lastContactMinAgo: 22,
+        };
+      }
+      return v;
+    });
+
+    const ranked = rankFleet(
+      vessels.map((v) => ({ ...v, assessment: assessVesselRisk(v, storm, hazards, 0) }))
+    );
+
+    return {
+      storm,
+      vessels: ranked,
+      incidents: createInitialIncidents(),
+      requests: createInitialRequests(),
+      scenarioName: '5. Offline HUD Reconnection & Sync',
+    };
+  }
+
+  // Default scenario-1
+  return {
+    storm: baseStorm,
+    vessels: baseVessels,
+    incidents: createInitialIncidents(),
+    requests: createInitialRequests(),
+    scenarioName: '1. Approaching Storm Cell (Track Intersection)',
+  };
+}
+
+/**
+ * Advance deterministic simulation tick
+ */
 export function stepSimulationTick(
   vessels: VesselState[],
   storm: StormState,
@@ -271,18 +533,20 @@ export function stepSimulationTick(
     };
   });
 
-  // 3. Recalculate deterministic risk and rank fleet
-  const assessedVessels = rankFleet(
-    nextVessels.map((v) => ({
-      ...v,
-      assessment: assessVesselRisk(v, nextStorm, hazards, nextSim.simTimeMinutes),
-    }))
-  );
+  const nextSimTimeMinutes = (sim.simTimeMinutes || 0) + deltaMinutes;
 
   const nextSim: SimulationState = {
     ...sim,
-    simTimeMinutes: sim.simTimeMinutes + deltaMinutes,
+    simTimeMinutes: nextSimTimeMinutes,
   };
+
+  // 3. Recalculate deterministic risk and rank fleet (TDZ-free)
+  const assessedVessels = rankFleet(
+    nextVessels.map((v) => ({
+      ...v,
+      assessment: assessVesselRisk(v, nextStorm, hazards, nextSimTimeMinutes),
+    }))
+  );
 
   return {
     vessels: assessedVessels,

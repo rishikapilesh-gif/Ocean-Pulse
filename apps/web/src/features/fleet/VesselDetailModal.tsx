@@ -30,21 +30,22 @@ export const VesselDetailPanel: React.FC = () => {
 
   const v = selectedVessel;
   const a = v.assessment;
-  const advice = v.lastDeliveredWarning.level;
-  const lang = TRANSLATIONS[activeLang];
+  const rawAdvice = v.lastDeliveredWarning?.level || (a?.level === 'Critical' ? 'DANGER' : a?.level === 'High' || a?.level === 'Medium' ? 'CAUTION' : 'SAFE');
+  const advice: 'SAFE' | 'CAUTION' | 'DANGER' = rawAdvice === 'DANGER' ? 'DANGER' : rawAdvice === 'CAUTION' ? 'CAUTION' : 'SAFE';
+  const lang = TRANSLATIONS[activeLang] || TRANSLATIONS.en;
 
   const handleSpeak = () => {
     if (!('speechSynthesis' in window)) {
       setSpeechNotice('Speech synthesis unsupported in this browser.');
       return;
     }
-    const text = lang.advice[advice];
+    const text = lang?.advice?.[advice] || 'Safe conditions. Continue journey carefully.';
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = lang.code;
+    u.lang = lang?.code || 'en-IN';
     u.rate = 0.9;
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(u);
-    setSpeechNotice(`Synthesized speech in ${lang.name}`);
+    setSpeechNotice(`Synthesized speech in ${lang?.name || 'English'}`);
     setTimeout(() => setSpeechNotice(''), 4000);
   };
 
@@ -85,11 +86,11 @@ export const VesselDetailPanel: React.FC = () => {
             <CheckCircle className="w-2.5 h-2.5" /> GPS Active
           </span>
           <span className="px-2 py-0.5 rounded text-[10px] bg-ocean-800 text-ocean-200 border border-ocean-700">
-            {v.equipment.comms} ({v.equipment.rangeKm}km)
+            {v.equipment?.comms || 'VHF Marine Radio'} ({v.equipment?.rangeKm || 90}km)
           </span>
           <span
             className={`px-2 py-0.5 rounded text-[10px] border flex items-center gap-1 ${
-              v.equipment.hasWeatherReceiver
+              v.equipment?.hasWeatherReceiver
                 ? 'bg-ocean-800 text-emerald-300 border-emerald-800/60'
                 : 'bg-ocean-950 text-ocean-400 border-ocean-800 line-through'
             }`}
@@ -98,7 +99,7 @@ export const VesselDetailPanel: React.FC = () => {
           </span>
           <span
             className={`px-2 py-0.5 rounded text-[10px] border flex items-center gap-1 ${
-              v.equipment.hasCompass
+              v.equipment?.hasCompass
                 ? 'bg-ocean-800 text-emerald-300 border-emerald-800/60'
                 : 'bg-ocean-950 text-ocean-400 border-ocean-800 line-through'
             }`}
@@ -107,7 +108,7 @@ export const VesselDetailPanel: React.FC = () => {
           </span>
           <span
             className={`px-2 py-0.5 rounded text-[10px] border flex items-center gap-1 ${
-              v.equipment.hasEngineSensor
+              v.equipment?.hasEngineSensor
                 ? 'bg-ocean-800 text-emerald-300 border-emerald-800/60'
                 : 'bg-ocean-950 text-ocean-400 border-ocean-800 line-through'
             }`}

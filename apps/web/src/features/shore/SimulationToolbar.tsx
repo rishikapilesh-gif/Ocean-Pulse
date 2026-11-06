@@ -12,15 +12,15 @@ import {
 } from 'lucide-react';
 
 export const SimulationToolbar: React.FC = () => {
-  const { simulation, storm, togglePlay, setSpeed, loadScenario, resetScenario } = useFleet();
+  const { simulation, storm, togglePlay, setSpeed, setFollowAdvice, updateStorm, loadScenario, resetScenario } = useFleet();
   const [stormDrawerOpen, setStormDrawerOpen] = useState(false);
 
   const handleFollowAdviceChange = async (checked: boolean) => {
-    await api.controlSimulation({ action: 'SET_FOLLOW_ADVICE', followAdvice: checked });
+    await setFollowAdvice(checked);
   };
 
   const handleStormChange = async (params: any) => {
-    await api.controlSimulation({ action: 'UPDATE_STORM', storm: params });
+    await updateStorm(params);
   };
 
   return (

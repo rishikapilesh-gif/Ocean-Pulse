@@ -14,7 +14,7 @@ import {
 import { Layers, Compass, Wind, ShieldAlert } from 'lucide-react';
 
 export const OceanMap: React.FC = () => {
-  const { vessels, storm, hazards, selectedVesselId, setSelectedVesselId, simulation, updateWhatIf } = useFleet();
+  const { vessels, storm, hazards, selectedVesselId, setSelectedVesselId, simulation, updateWhatIf, updateStorm } = useFleet();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // Layer visibility toggles
@@ -137,7 +137,7 @@ export const OceanMap: React.FC = () => {
       // 2. Shore Command Station & Radio Coverage
       const [tx, ty] = S(TOWER_COORDS.x, TOWER_COORDS.y);
 
-      if (showRange && selectedVessel) {
+      if (showRange && selectedVessel?.equipment?.rangeKm) {
         ctx.save();
         ctx.setLineDash([4, 6]);
         ctx.strokeStyle = 'rgba(0, 240, 255, 0.45)';
@@ -281,7 +281,7 @@ export const OceanMap: React.FC = () => {
       // 5. Vessel Trails with glowing fade
       if (showTrails) {
         for (const b of vessels) {
-          if (b.trail.length < 2) continue;
+          if (!b.trail || b.trail.length < 2) continue;
           const isSel = b.id === selectedVesselId;
           ctx.strokeStyle = isSel ? 'rgba(0, 240, 255, 0.85)' : 'rgba(125, 211, 252, 0.35)';
           ctx.lineWidth = isSel ? 2.5 : 1.5;
@@ -300,15 +300,16 @@ export const OceanMap: React.FC = () => {
       if (showPredictions) {
         for (const b of vessels) {
           const a = b.assessment;
-          if (!a || !a.horizons) continue;
+          if (!a || !a.horizons || !Array.isArray(a.horizons) || a.horizons.length === 0) continue;
           const isSel = b.id === selectedVesselId;
 
-          const sp = b.effectiveSpeedKmh / 60;
-          const vx = Math.cos(b.headingRad) * sp;
-          const vy = Math.sin(b.headingRad) * sp;
+          const sp = (b.effectiveSpeedKmh || b.speedKmh || 10) / 60;
+          const heading = b.headingRad || 0;
+          const vx = Math.cos(heading) * sp;
+          const vy = Math.sin(heading) * sp;
 
-          const repX = b.glitchActive ? b.x + b.glitchOffset.x : b.x;
-          const repY = b.glitchActive ? b.y + b.glitchOffset.y : b.y;
+          const repX = b.glitchActive && b.glitchOffset ? b.x + b.glitchOffset.x : b.x;
+          const repY = b.glitchActive && b.glitchOffset ? b.y + b.glitchOffset.y : b.y;
 
           const pts = a.horizons.map((h) => S(repX + vx * h.minute, repY + vy * h.minute));
 
@@ -318,7 +319,7 @@ export const OceanMap: React.FC = () => {
           ctx.lineWidth = isSel ? 2.5 : 1.5;
 
           for (let i = 0; i < pts.length - 1; i++) {
-            const r = a.horizons[i + 1].riskScore;
+            const r = a.horizons[i + 1]?.riskScore ?? 0;
             ctx.strokeStyle = r >= 0.8 ? '#ff1a40' : r >= 0.6 ? '#f97316' : r >= 0.35 ? '#f59e0b' : '#10b981';
             ctx.beginPath();
             ctx.moveTo(pts[i][0], pts[i][1]);
@@ -329,6 +330,7 @@ export const OceanMap: React.FC = () => {
           ctx.setLineDash([]);
           for (let i = 1; i < pts.length; i++) {
             const h = a.horizons[i];
+            if (!h) continue;
             const col = h.riskScore >= 0.8 ? '#ff1a40' : h.riskScore >= 0.6 ? '#f97316' : h.riskScore >= 0.35 ? '#f59e0b' : '#10b981';
             ctx.fillStyle = col;
             ctx.strokeStyle = '#020813';
@@ -351,8 +353,8 @@ export const OceanMap: React.FC = () => {
       if (showSafeArrows) {
         for (const b of vessels) {
           const a = b.assessment;
-          if (!a || a.safeAngleRad === null || a.rawRisk < 0.35) continue;
-          if (b.id !== selectedVesselId && a.rawRisk < 0.6) continue;
+          if (!a || a.safeAngleRad == null || isNaN(a.safeAngleRad) || (a.rawRisk ?? 0) < 0.35) continue;
+          if (b.id !== selectedVesselId && (a.rawRisk ?? 0) < 0.6) continue;
 
           const [bx, by] = S(b.x, b.y);
           const arrowLen = 7.5 * scale;
@@ -398,7 +400,7 @@ export const OceanMap: React.FC = () => {
           : '#10b981';
 
         // GPS Glitch ghost marker
-        if (b.glitchActive) {
+        if (b.glitchActive && b.glitchOffset) {
           const [gx, gy] = S(b.x + b.glitchOffset.x, b.y + b.glitchOffset.y);
           ctx.save();
           ctx.setLineDash([3, 3]);
@@ -445,7 +447,7 @@ export const OceanMap: React.FC = () => {
         // Ship hull shape rotated to heading
         ctx.save();
         ctx.translate(bx, by);
-        ctx.rotate(b.headingRad);
+        ctx.rotate(b.headingRad || 0);
         ctx.beginPath();
         ctx.moveTo(11, 0); // Bow
         ctx.lineTo(-7, 6.5); // Port quarter
@@ -566,8 +568,10 @@ export const OceanMap: React.FC = () => {
     const worldX = (px - ox) / scale;
     const worldY = (py - oy) / scale;
 
-    storm.x = worldX + draggingRef.current.dx;
-    storm.y = worldY + draggingRef.current.dy;
+    const newX = Math.max(5, Math.min(115, worldX + draggingRef.current.dx));
+    const newY = Math.max(5, Math.min(75, worldY + draggingRef.current.dy));
+
+    updateStorm({ x: newX, y: newY });
   };
 
   const handlePointerUp = () => {
