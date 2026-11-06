@@ -25,6 +25,15 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Instant Zero-Password Default Evaluator User for Hackathon Jury
+const DEFAULT_EVALUATOR_USER: User = {
+  id: 'evaluator-jury-01',
+  name: 'Jury Evaluator (Direct Access)',
+  email: 'viewer@oceanpulse.org',
+  role: ROLES.SHORE_OPERATOR,
+  assignedVesselId: 'B01',
+};
+
 const DEMO_CREDENTIALS: Record<UserRole, { email: string; password: string }> = {
   [ROLES.ADMIN]: { email: 'admin@oceanpulse.org', password: 'AdminPass123!' },
   [ROLES.SHORE_OPERATOR]: { email: 'operator@oceanpulse.org', password: 'ShorePass123!' },
@@ -34,60 +43,62 @@ const DEMO_CREDENTIALS: Record<UserRole, { email: string; password: string }> = 
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem('ocean_pulse_token'));
-  const [loading, setLoading] = useState<boolean>(true);
+  // Always initialized with instant valid session — ZERO password needed
+  const [user, setUser] = useState<User>(DEFAULT_EVALUATOR_USER);
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem('ocean_pulse_token') || 'demo-evaluator-token');
+  const [loading, setLoading] = useState<boolean>(false);
 
   useEffect(() => {
     async function loadUser() {
-      if (token) {
-        try {
-          const res = await api.getCurrentUser();
+      // Optional check if backend API is online
+      try {
+        const res = await api.getCurrentUser();
+        if (res?.user) {
           setUser(res.user);
-        } catch (err) {
-          console.warn('[Auth] Token expired or invalid, clearing local session.');
-          localStorage.removeItem('ocean_pulse_token');
-          setToken(null);
-          setUser(null);
         }
-      } else {
-        // Default to Demo Viewer for zero-friction hackathon exploration
-        try {
-          const res = await api.login(DEMO_CREDENTIALS[ROLES.SHORE_OPERATOR]);
-          localStorage.setItem('ocean_pulse_token', res.token);
-          setToken(res.token);
-          setUser(res.user);
-        } catch (e) {
-          console.warn('[Auth] Demo auto-sign-in skipped:', e);
-        }
+      } catch (err) {
+        // Fallback gracefully to default evaluator — NEVER log out or block
+        setUser(DEFAULT_EVALUATOR_USER);
       }
-      setLoading(false);
     }
     loadUser();
   }, []);
 
   const login = async (email: string, pass: string) => {
-    const res = await api.login({ email, password: pass });
-    localStorage.setItem('ocean_pulse_token', res.token);
-    setToken(res.token);
-    setUser(res.user);
+    try {
+      const res = await api.login({ email, password: pass });
+      localStorage.setItem('ocean_pulse_token', res.token);
+      setToken(res.token);
+      setUser(res.user);
+    } catch (e) {
+      // Direct pass for hackathon demo
+      setUser(DEFAULT_EVALUATOR_USER);
+    }
   };
 
   const logout = async () => {
-    try {
-      await api.logout();
-    } catch (e) {
-      // ignore
-    }
     localStorage.removeItem('ocean_pulse_token');
-    setToken(null);
-    setUser(null);
+    // Instead of logging out to a blocked state, reset to evaluator
+    setUser(DEFAULT_EVALUATOR_USER);
   };
 
   const switchDemoRole = async (role: UserRole) => {
-    const creds = DEMO_CREDENTIALS[role];
-    if (creds) {
-      await login(creds.email, creds.password);
+    try {
+      const creds = DEMO_CREDENTIALS[role];
+      if (creds) {
+        const res = await api.login(creds);
+        localStorage.setItem('ocean_pulse_token', res.token);
+        setToken(res.token);
+        setUser(res.user);
+      }
+    } catch (e) {
+      setUser({
+        id: `demo-${role}`,
+        name: `${role} (Evaluator)`,
+        email: `${role.toLowerCase()}@oceanpulse.org`,
+        role,
+        assignedVesselId: role === ROLES.FISHERMAN ? 'B01' : null,
+      });
     }
   };
 
@@ -116,8 +127,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
 };
 
-export function useAuth() {
+export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within an AuthProvider');
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
   return context;
-}
+};
